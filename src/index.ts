@@ -154,6 +154,7 @@ log(
 			const ethAddress = text.match(/0x[a-fA-F0-9]{40}/)?.[0];
 
 			ethAddress &&
+				utils.isAddress(ethAddress) &&
 				ethAddresses.set(ethAddress, {
 					userId,
 					balance: +utils.formatEther(await provider.getBalance(ethAddress)),
