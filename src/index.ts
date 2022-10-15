@@ -5,7 +5,7 @@ import readline from 'readline';
 import { log } from 'console-styling';
 import { utils, providers } from 'ethers';
 import axios from 'axios';
-import jsdom from 'jsdom';
+import { JSDOM } from 'jsdom';
 
 interface AddressEntries {
 	userId: string;
@@ -45,7 +45,7 @@ function saveFile(data: Map<string, any>, name: string) {
 }
 
 log(
-	'------REDDIT ETH ADDRESS SCRAPPER------\n\n by Ryan Deets\n\nhttps://github.com/rdeets/\n',
+	'------REDDIT ETH ADDRESS SCRAPPER------\n\nBy Ryan Deets\n\nhttps://github.com/rdeets/\n',
 	{ color: 'magenta' }
 );
 
@@ -76,66 +76,68 @@ log(
 	async function searchQuery() {
 		let urlInput = '';
 		while (true) {
-			urlInput = await prompt(
-				'\nEnter content or URL (q to exit) (s to save)\n->: '
-			);
-			if (urlInput == 'q' || urlInput == 's') {
-				break;
-			}
+			urlInput = await prompt('\nEnter content or URL (q to exit)\n->: ');
+			if (urlInput == 'q') break;
+
 			await scrapePage(urlInput);
+			saveFile(ethAddresses, 'ethAddresses');
 		}
-		ethAddresses.size > 0 && saveFile(ethAddresses, 'ethAddresses');
-		if (urlInput == 's') await searchQuery();
 	}
 
 	async function multiPageScrape(url: string) {
 		try {
 			log('Scrapping ' + url, { preset: 'info' });
-			const dom = new jsdom.JSDOM(
+			const dom = new JSDOM(
 				(await axios.get(url.replace('www.', 'old.'))).data
 			);
 			const document = dom.window.document;
 
-			await page.goto(url.replace('www.', 'old.'));
+			await page.goto(url.replace('www.', 'old.'), {
+				waitUntil: 'domcontentloaded'
+			});
 
 			const pageUrls = await page.evaluate(() => {
 				return Array.from(document.links).map((link: any) => link.href);
 			});
-			const commentArray = [
-				...new Set(pageUrls.filter((link: any) => link.includes('/comments/')))
-			];
-			const nextPage = pageUrls.find((link) => link.includes('/?count=25'));
+			const commentArray = pageUrls.filter((link: any) =>
+				link.includes('/comments/')
+			);
+			const pageLinks: string[] = pageUrls.filter((link) =>
+				link.includes('/?count=')
+			);
+			const nextPage = pageLinks[pageLinks.length - 2] ?? pageLinks[0];
+			const uniqueUrlArray = [...new Set(commentArray)];
 
-			let oldAddressSize = ethAddresses.size;
-			for (const page of commentArray) {
+			let old = ethAddresses.size;
+			for (const page of uniqueUrlArray) {
 				await scrapePage(page);
-				if (oldAddressSize < ethAddresses.size) {
+				if (old < ethAddresses.size) {
 					saveFile(ethAddresses, 'ethAddresses');
-					oldAddressSize = ethAddresses.size;
+					old = ethAddresses.size;
 				}
 			}
 
-			log('pausing for 3 seconds');
+			log('Pausing for 3 seconds');
 			await sleep(3000);
-			nextPage && multiPageScrape(nextPage);
+			nextPage && (await multiPageScrape(nextPage));
 		} catch (error) {
 			log(error, { preset: 'error' });
 		}
 	}
 
 	async function scrapePage(url: string) {
-		log('Scrapping: ' + url, { preset: 'info' });
-		await page.goto(url.replace('www.', 'old.'));
+		log('scrapping: ' + url, { preset: 'info' });
+		await page.goto(url.replace('www.', 'old.'), {
+			waitUntil: 'domcontentloaded'
+		});
 		await page.$$('.morecomments');
 		const comments = await page.$$('.entry');
 		const formattedComments: Comment[] = [];
-
-		comments.forEach(async (comment) => {
+		for (const comment of comments) {
 			// scrape points
 			const [points, author, rawText] = await Promise.all([
 				comment.$eval('.score', (el: any) => el.textContent).catch(() => {}), //no score
-				comment.$eval('.author', (el: any) => el.textContent).catch(() => {}), //no text
-				// scrape texts
+				comment.$eval('.author', (el: any) => el.textContent).catch(() => {}), //no author
 				comment
 					.$eval('.usertext-body', (el: any) => el.textContent)
 					.catch(() => {}) //no text
@@ -146,7 +148,7 @@ log(
 					url,
 					userId: author
 				});
-		});
+		}
 
 		formattedComments.forEach(async ({ text, url, userId }: Comment) => {
 			const ethAddress = text.match(/0x[a-fA-F0-9]{40}/)?.[0];
@@ -163,17 +165,23 @@ log(
 	!fs.existsSync('./export') && fs.mkdirSync('./export');
 
 	try {
-		const choice = await prompt(
-			'\n1. Scrape Single Reddit Page\n2. Scrape Subreddit\n3. Filter Addresses\nChoose number: '
-		);
-		if (choice == '1') {
-			await searchQuery();
-		} else if (choice == '2') {
-			let urlInput = '';
-			urlInput = await prompt('\nEnter subreddit url\n->: ');
-			await multiPageScrape(urlInput);
-			ethAddresses.size > 0 && saveFile(ethAddresses, 'ethAddresses');
-		} else if (choice == '3') return await filterAddresses();
+		switch (
+			await prompt(
+				'\n1. Scrape Single Reddit Page\n2. Scrape Subreddit\n3. Filter Addresses\nChoose number: '
+			)
+		) {
+			case '1':
+				await searchQuery();
+				break;
+			case '2':
+				await multiPageScrape(await prompt('\nEnter subreddit url\n->: '));
+				break;
+			case '3':
+				await filterAddresses();
+				break;
+			default:
+				log('Invalid entry', { preset: 'error' });
+		}
 	} catch (error) {
 		log('Unable to get page: ' + error, {
 			preset: 'error'
