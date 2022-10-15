@@ -86,7 +86,7 @@ log(
 
 	async function multiPageScrape(url: string) {
 		try {
-			log('Scrapping ' + url, { preset: 'info' });
+			log('Scrapping Page: ' + url, { preset: 'info' });
 			const dom = new JSDOM(
 				(await axios.get(url.replace('www.', 'old.'))).data
 			);
@@ -108,18 +108,17 @@ log(
 			const nextPage = pageLinks[pageLinks.length - 2] ?? pageLinks[0];
 			const uniqueUrlArray = [...new Set(commentArray)];
 
-			let old = ethAddresses.size;
+			const promises: Promise<any>[] = [];
 			for (const page of uniqueUrlArray) {
-				await scrapePage(page);
-				if (old < ethAddresses.size) {
-					saveFile(ethAddresses, 'ethAddresses');
-					old = ethAddresses.size;
-				}
+				promises.push(scrapePage(page));
 			}
+			await Promise.all(promises);
+			saveFile(ethAddresses, 'ethAddresses');
 
 			log('Pausing for 3 seconds');
 			await sleep(3000);
-			nextPage && (await multiPageScrape(nextPage));
+			nextPage?.includes('&after=') && (await multiPageScrape(nextPage));
+			log('Scrapping Complete', { preset: 'success' });
 		} catch (error) {
 			log(error, { preset: 'error' });
 		}
@@ -127,6 +126,7 @@ log(
 
 	async function scrapePage(url: string) {
 		log('scrapping: ' + url, { preset: 'info' });
+		const page = await browser.newPage();
 		await page.goto(url.replace('www.', 'old.'), {
 			waitUntil: 'domcontentloaded'
 		});
@@ -152,6 +152,7 @@ log(
 
 		formattedComments.forEach(async ({ text, url, userId }: Comment) => {
 			const ethAddress = text.match(/0x[a-fA-F0-9]{40}/)?.[0];
+
 			ethAddress &&
 				ethAddresses.set(ethAddress, {
 					userId,
@@ -159,6 +160,7 @@ log(
 					url
 				});
 		});
+		await page.close();
 	}
 
 	// Make 'export' directory if it doesn't exist
