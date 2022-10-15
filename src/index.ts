@@ -4,12 +4,22 @@ import fs from 'fs';
 import readline from 'readline';
 import { log } from 'console-styling';
 import { utils, providers } from 'ethers';
+import axios from 'axios';
+import jsdom from 'jsdom';
 
 interface AddressEntries {
 	userId: string;
 	balance: number;
 	url: string;
 }
+
+interface Comment {
+	text: string;
+	url: string;
+	userId: string;
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function fetchFile<T>(name: string) {
 	return new Map<string, T>(
@@ -34,8 +44,9 @@ function saveFile(data: Map<string, any>, name: string) {
 	);
 }
 
-console.log(
-	'------REDDIT ETH ADDRESS SCRAPPER------\n\n by Ryan Deets\n\nhttps://github.com/rdeets/\n'
+log(
+	'------REDDIT ETH ADDRESS SCRAPPER------\n\n by Ryan Deets\n\nhttps://github.com/rdeets/\n',
+	{ color: 'magenta' }
 );
 
 (async () => {
@@ -77,17 +88,53 @@ console.log(
 		if (urlInput == 's') await searchQuery();
 	}
 
+	async function multiPageScrape(url: string) {
+		try {
+			log('Scrapping ' + url, { preset: 'info' });
+			const dom = new jsdom.JSDOM(
+				(await axios.get(url.replace('www.', 'old.'))).data
+			);
+			const document = dom.window.document;
+
+			await page.goto(url.replace('www.', 'old.'));
+
+			const pageUrls = await page.evaluate(() => {
+				return Array.from(document.links).map((link: any) => link.href);
+			});
+			const commentArray = [
+				...new Set(pageUrls.filter((link: any) => link.includes('/comments/')))
+			];
+			const nextPage = pageUrls.find((link) => link.includes('/?count=25'));
+
+			let oldAddressSize = ethAddresses.size;
+			for (const page of commentArray) {
+				await scrapePage(page);
+				if (oldAddressSize < ethAddresses.size) {
+					saveFile(ethAddresses, 'ethAddresses');
+					oldAddressSize = ethAddresses.size;
+				}
+			}
+
+			log('pausing for 3 seconds');
+			await sleep(3000);
+			nextPage && multiPageScrape(nextPage);
+		} catch (error) {
+			log(error, { preset: 'error' });
+		}
+	}
+
 	async function scrapePage(url: string) {
+		log('Scrapping: ' + url, { preset: 'info' });
 		await page.goto(url.replace('www.', 'old.'));
 		await page.$$('.morecomments');
 		const comments = await page.$$('.entry');
-		const formattedComments = [];
+		const formattedComments: Comment[] = [];
 
-		for (const comment of comments) {
+		comments.forEach(async (comment) => {
 			// scrape points
 			const [points, author, rawText] = await Promise.all([
 				comment.$eval('.score', (el: any) => el.textContent).catch(() => {}), //no score
-				comment.$eval('.author', (el: any) => el.textContent).catch(() => {}), //no score
+				comment.$eval('.author', (el: any) => el.textContent).catch(() => {}), //no text
 				// scrape texts
 				comment
 					.$eval('.usertext-body', (el: any) => el.textContent)
@@ -99,29 +146,16 @@ console.log(
 					url,
 					userId: author
 				});
-		}
+		});
 
-		formattedComments.forEach(
-			async ({
-				text,
-				url,
-				userId
-			}: {
-				text: string;
-				url: string;
-				userId: string;
-			}) => {
-				const ethAddress = text.match(/0x[a-fA-F0-9]{40}/)?.[0];
-				ethAddress &&
-					ethAddresses.set(ethAddress, {
-						userId,
-						balance: +utils.formatEther(await provider.getBalance(ethAddress)),
-						url
-					});
-			}
-		);
-		log(`${ethAddresses.size} Total ETH Addresses`, {
-			preset: 'info'
+		formattedComments.forEach(async ({ text, url, userId }: Comment) => {
+			const ethAddress = text.match(/0x[a-fA-F0-9]{40}/)?.[0];
+			ethAddress &&
+				ethAddresses.set(ethAddress, {
+					userId,
+					balance: +utils.formatEther(await provider.getBalance(ethAddress)),
+					url
+				});
 		});
 	}
 
@@ -130,11 +164,16 @@ console.log(
 
 	try {
 		const choice = await prompt(
-			'\n1. Scrape Reddit\n2. Filter Addresses\nChoose number: '
+			'\n1. Scrape Single Reddit Page\n2. Scrape Subreddit\n3. Filter Addresses\nChoose number: '
 		);
-		if (choice == '2') return await filterAddresses();
-
-		await searchQuery();
+		if (choice == '1') {
+			await searchQuery();
+		} else if (choice == '2') {
+			let urlInput = '';
+			urlInput = await prompt('\nEnter subreddit url\n->: ');
+			await multiPageScrape(urlInput);
+			ethAddresses.size > 0 && saveFile(ethAddresses, 'ethAddresses');
+		} else if (choice == '3') return await filterAddresses();
 	} catch (error) {
 		log('Unable to get page: ' + error, {
 			preset: 'error'

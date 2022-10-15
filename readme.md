@@ -22,8 +22,8 @@ Made with Puppeteer
 # Features
 
 Save and append data.<br />
-Search by URL.<br />
-Scrape ETH Address.<br />
+Scrape by URL.<br />
+Scrape entire Subreddit.<br />
 Get the wallet balance.<br />
 Filter by wallet balance.<br />
 
